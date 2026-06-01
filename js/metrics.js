@@ -316,9 +316,9 @@ const Metrics = (() => {
                    a.average_speed && a.distance > 5000)
       .map(a => ({
         date: new Date(a.start_date_local),
-        pace: 1000 / (a.average_speed * 60), // s/km
+        pace: 1000 / a.average_speed, // s/km
         hr: a.average_heartrate,
-        ef: a.average_heartrate / (a.average_speed * 60 / 1000) // HR per pace
+        ef: a.average_heartrate / (a.average_speed * 3.6) // HR per pace
       }))
       .sort((a, b) => a.date - b.date);
   }

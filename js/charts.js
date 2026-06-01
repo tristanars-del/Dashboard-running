@@ -493,7 +493,7 @@ const Charts = (() => {
       .filter(a => a.average_heartrate && a.average_speed && a.distance > 3000)
       .map(a => ({
         x: a.average_heartrate,
-        y: 1000 / (a.average_speed * 60)
+        y: 1000 / a.average_speed
       }));
 
     if (data.length < 5) return;

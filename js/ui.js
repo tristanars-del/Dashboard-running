@@ -216,7 +216,7 @@ const UI = (() => {
     const dist = Fmt.km(activity.distance);
     const dur = Fmt.duration(activity.moving_time);
     const pace = activity.average_speed
-      ? Fmt.pace(1000 / (activity.average_speed * 60))
+      ? Fmt.pace(1000 / activity.average_speed)
       : '—';
     const hr = activity.average_heartrate ? `${Math.round(activity.average_heartrate)} bpm` : '—';
 
@@ -265,7 +265,7 @@ const UI = (() => {
     const latlng = MapModule.getLatLng(streams, activity);
 
     const tss = Metrics.computeTSS(activity, fcmax);
-    const pace = activity.average_speed ? 1000 / (activity.average_speed * 60) : null;
+    const pace = activity.average_speed ? 1000 / activity.average_speed : null;
 
     const content = document.getElementById('session-detail-content');
     content.innerHTML = `
@@ -372,7 +372,7 @@ const UI = (() => {
   function renderLaps(laps) {
     const wrap = document.getElementById('detail-laps-wrap');
     const rows = laps.map(lap => {
-      const pace = lap.average_speed ? 1000 / (lap.average_speed * 60) : null;
+      const pace = lap.average_speed ? 1000 / lap.average_speed : null;
       return `<tr>
         <td>${lap.lap_index || '—'}</td>
         <td>${Fmt.km(lap.distance)} km</td>
@@ -410,7 +410,7 @@ const UI = (() => {
         const section_vel = vel.slice(start, i).filter(v => v > 0);
         const avgHr = section_hr.length ? MathUtils.mean(section_hr) : null;
         const avgVel = section_vel.length ? MathUtils.mean(section_vel) : null;
-        const pace = avgVel ? 1000 / (avgVel * 60) : null;
+        const pace = avgVel ? 1000 / avgVel : null;
         splits.push({
           km: kmIndex,
           avgHr: avgHr ? Math.round(avgHr) : null,
@@ -568,7 +568,7 @@ const UI = (() => {
     ];
     el.innerHTML = `<div class="vdot-grid">` + distances.map(d => {
       const t = Metrics.predictRaceTime(vma, d.m);
-      const pace = t ? 1000 / (d.m / t * 60) : null; // s/km
+      const pace = t ? t / (d.m / 1000) : null; // s/km
       return `<div class="vdot-card">
         <div class="vdot-dist">${d.label}</div>
         <div class="vdot-time">${t ? fmtRaceTime(t) : '—'}</div>
@@ -583,7 +583,7 @@ const UI = (() => {
     const paces = Metrics.trainingPaces(vma);
     el.innerHTML = `<div class="paces-grid">` + Object.entries(paces).map(([k, p]) => {
       const speedMperSec = vma * p.pct / 60; // m/s
-      const paceSecPerKm = 1000 / (speedMperSec * 60);
+      const paceSecPerKm = 1000 / speedMperSec;
       return `<div class="pace-card">
         <div class="pace-type">${p.name}</div>
         <div class="pace-val">${Fmt.pace(paceSecPerKm)}</div>
