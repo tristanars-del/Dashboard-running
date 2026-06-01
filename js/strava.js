@@ -1,212 +1,175 @@
-/* ============================================================
-   strava.js — Strava API client with caching and rate limiting
-   ============================================================ */
-
 const Strava = (() => {
   const BASE = 'https://www.strava.com/api/v3';
-  const CACHE_VERSION = 'v2';
-  const RUNS_KEY = `strava_runs_${CACHE_VERSION}`;
-  const STREAMS_KEY_PREFIX = `strava_stream_${CACHE_VERSION}_`;
-  const EFFORTS_KEY_PREFIX = `strava_efforts_${CACHE_VERSION}_`;
+  const RUNS_KEY = 'strava_runs_v2';
   const LAST_FETCH_KEY = 'strava_last_fetch';
+  const STREAM_PREFIX = 'strava_stream_v2_';
+  const EFFORT_PREFIX = 'strava_effort_v2_';
+  let reqCount = 0;
 
-  let requestCount = 0;
+  function lsGet(key) {
+    try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch { return null; }
+  }
+  function lsSet(key, val) {
+    try { localStorage.setItem(key, JSON.stringify(val)); return true; }
+    catch(e) {
+      if (e.name === 'QuotaExceededError') {
+        // Clear stream/effort caches only, keep runs
+        const toRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith(STREAM_PREFIX) || k.startsWith(EFFORT_PREFIX))) toRemove.push(k);
+        }
+        toRemove.forEach(k => localStorage.removeItem(k));
+        try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+      }
+      return false;
+    }
+  }
 
-  async function apiFetch(endpoint, params = {}) {
-    const token = await Auth.getToken();
+  async function apiFetch(endpoint, params) {
+    const token = localStorage.getItem('strava_access_token');
     if (!token) throw new Error('No auth token');
 
-    // Rate limiting: pause every 90 requests to avoid hitting Strava's 100/15min limit
-    requestCount++;
-    if (requestCount % 90 === 0) {
-      console.log('[Strava] Rate limit pause — waiting 15 minutes...');
-      // In practice we pause briefly and warn user
-      await sleep(2000);
+    // Auto-refresh if expired
+    const exp = parseFloat(localStorage.getItem('strava_expires_at') || '0');
+    if (Date.now() / 1000 > exp - 60) {
+      await refreshToken();
     }
 
-    const url = new URL(`${BASE}${endpoint}`);
-    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+    reqCount++;
+    if (reqCount % 85 === 0) await new Promise(r => setTimeout(r, 2000));
 
-    const resp = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+    const url = new URL(BASE + endpoint);
+    if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
 
-    if (resp.status === 429) {
-      // Rate limited
-      const retryAfter = parseInt(resp.headers.get('X-RateLimit-Reset') || '900');
-      throw new Error(`rate_limited:${retryAfter}`);
+    const freshToken = localStorage.getItem('strava_access_token');
+    const resp = await fetch(url.toString(), { headers: { Authorization: 'Bearer ' + freshToken } });
+
+    if (resp.status === 401) {
+      await refreshToken();
+      const t2 = localStorage.getItem('strava_access_token');
+      const r2 = await fetch(url.toString(), { headers: { Authorization: 'Bearer ' + t2 } });
+      if (!r2.ok) throw new Error('API ' + r2.status);
+      return r2.json();
     }
-
-    if (!resp.ok) {
-      throw new Error(`API error ${resp.status}: ${await resp.text()}`);
-    }
+    if (resp.status === 429) throw new Error('rate_limited');
+    if (!resp.ok) throw new Error('API ' + resp.status);
     return resp.json();
   }
 
-  // Fetch all running activities (with pagination + incremental refresh)
+  async function refreshToken() {
+    const cid = localStorage.getItem('strava_client_id');
+    const csec = localStorage.getItem('strava_client_secret');
+    const rt = localStorage.getItem('strava_refresh_token');
+    if (!rt || !cid || !csec) return;
+    const resp = await fetch('https://www.strava.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: cid, client_secret: csec, refresh_token: rt, grant_type: 'refresh_token' })
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    localStorage.setItem('strava_access_token', data.access_token);
+    localStorage.setItem('strava_refresh_token', data.refresh_token);
+    localStorage.setItem('strava_expires_at', data.expires_at);
+  }
+
   async function fetchAllActivities(progressCb) {
-    const cached = Store.get(RUNS_KEY) || [];
-    const lastFetch = Store.get(LAST_FETCH_KEY);
-
-    const params = {
-      activity_type: 'Run',
-      per_page: 200
-    };
-
-    if (lastFetch && cached.length > 0) {
-      // Only fetch new activities
-      params.after = lastFetch;
-    }
+    const cached = lsGet(RUNS_KEY) || [];
+    const lastFetch = lsGet(LAST_FETCH_KEY);
+    const params = { per_page: 200 };
+    if (lastFetch && cached.length > 0) params.after = lastFetch;
 
     let page = 1;
-    let newActivities = [];
-
+    const newActs = [];
     while (true) {
-      if (progressCb) progressCb(`Chargement des activités (page ${page})…`);
-      const activities = await apiFetch('/athlete/activities', { ...params, page });
-
+      if (progressCb) progressCb('Chargement activités (page ' + page + ')…');
+      let activities;
+      try { activities = await apiFetch('/athlete/activities', { ...params, page }); }
+      catch(e) { console.warn('[Strava] fetch page ' + page + ':', e.message); break; }
       if (!activities || activities.length === 0) break;
-
-      // Filter only runs
-      const runs = activities.filter(a => a.type === 'Run' || a.sport_type === 'Run' ||
-                                          a.type === 'TrailRun' || a.sport_type === 'TrailRun');
-      newActivities = newActivities.concat(runs);
-
+      const runs = activities.filter(a =>
+        a.type === 'Run' || a.sport_type === 'Run' ||
+        a.type === 'TrailRun' || a.sport_type === 'TrailRun' ||
+        a.type === 'VirtualRun' || a.sport_type === 'VirtualRun'
+      );
+      newActs.push(...runs);
       if (activities.length < 200) break;
       page++;
     }
 
-    // Merge with cache (deduplicate by id)
-    const allIds = new Set(cached.map(a => a.id));
+    const idSet = new Set(cached.map(a => a.id));
     const merged = [...cached];
-    for (const a of newActivities) {
-      if (!allIds.has(a.id)) {
-        merged.push(a);
-        allIds.add(a.id);
-      } else {
-        // Update existing
-        const idx = merged.findIndex(x => x.id === a.id);
-        if (idx >= 0) merged[idx] = a;
-      }
+    for (const a of newActs) {
+      if (!idSet.has(a.id)) { merged.push(a); idSet.add(a.id); }
+      else { const i = merged.findIndex(x => x.id === a.id); if (i >= 0) merged[i] = a; }
     }
-
-    // Sort by date descending
     merged.sort((a, b) => new Date(b.start_date_local) - new Date(a.start_date_local));
-
-    Store.set(RUNS_KEY, merged);
-    Store.set(LAST_FETCH_KEY, Math.floor(Date.now() / 1000));
-
+    lsSet(RUNS_KEY, merged);
+    lsSet(LAST_FETCH_KEY, Math.floor(Date.now() / 1000));
     return merged;
   }
 
-  // Fetch streams for a single activity
   async function fetchStreams(activityId) {
-    const key = STREAMS_KEY_PREFIX + activityId;
-    const cached = Store.get(key);
+    const key = STREAM_PREFIX + activityId;
+    const cached = lsGet(key);
     if (cached) return cached;
-
     try {
-      const data = await apiFetch(`/activities/${activityId}/streams`, {
+      const data = await apiFetch('/activities/' + activityId + '/streams', {
         keys: 'time,distance,heartrate,velocity_smooth,altitude,latlng',
         key_by_type: true
       });
-      Store.set(key, data);
+      if (data) lsSet(key, data);
       return data;
-    } catch (e) {
-      console.warn(`[Strava] Stream fetch failed for ${activityId}:`, e.message);
-      return null;
-    }
+    } catch(e) { console.warn('[Strava] stream ' + activityId + ':', e.message); return null; }
   }
 
-  // Fetch streams for multiple activities with rate limiting
   async function fetchStreamsForActivities(activities, progressCb) {
-    const key = RUNS_KEY;
-    const runs = Store.get(key) || [];
     let done = 0;
-
     for (const a of activities) {
-      const cacheKey = STREAMS_KEY_PREFIX + a.id;
-      if (!Store.get(cacheKey)) {
-        if (progressCb) progressCb(`Streams: ${done}/${activities.length}…`);
+      if (!lsGet(STREAM_PREFIX + a.id)) {
         await fetchStreams(a.id);
         done++;
-
-        // Small delay to be polite to Strava API
-        if (done % 10 === 0) await sleep(1000);
-      } else {
-        done++;
+        if (done % 10 === 0) await new Promise(r => setTimeout(r, 500));
       }
     }
   }
 
-  // Fetch best efforts for a single activity
   async function fetchBestEfforts(activityId) {
-    const key = EFFORTS_KEY_PREFIX + activityId;
-    const cached = Store.get(key);
+    const key = EFFORT_PREFIX + activityId;
+    const cached = lsGet(key);
     if (cached) return cached;
-
     try {
-      const data = await apiFetch(`/activities/${activityId}`, { include_all_efforts: true });
+      const data = await apiFetch('/activities/' + activityId, { include_all_efforts: true });
       const efforts = data.best_efforts || [];
-      Store.set(key, efforts);
+      lsSet(key, efforts);
       return efforts;
-    } catch (e) {
-      console.warn(`[Strava] Best efforts failed for ${activityId}:`, e.message);
-      return [];
-    }
+    } catch(e) { console.warn('[Strava] efforts ' + activityId + ':', e.message); return []; }
   }
 
-  // Fetch best efforts for all activities in background (non-blocking)
   async function fetchAllBestEffortsBackground(activities, progressCb) {
     let done = 0;
     for (const a of activities) {
-      const key = EFFORTS_KEY_PREFIX + a.id;
-      if (!Store.get(key)) {
+      if (!lsGet(EFFORT_PREFIX + a.id)) {
         await fetchBestEfforts(a.id);
         done++;
         if (progressCb) progressCb(done, activities.length);
-        if (done % 15 === 0) await sleep(1000);
+        if (done % 15 === 0) await new Promise(r => setTimeout(r, 1000));
       }
     }
   }
 
-  // Get cached runs
-  function getCachedRuns() {
-    return Store.get(RUNS_KEY) || [];
-  }
-
-  // Get streams from cache
-  function getCachedStreams(activityId) {
-    return Store.get(STREAMS_KEY_PREFIX + activityId);
-  }
-
-  // Get best efforts from cache
-  function getCachedEfforts(activityId) {
-    return Store.get(EFFORTS_KEY_PREFIX + activityId) || [];
-  }
-
-  // Clear all cached data
+  function getCachedRuns() { return lsGet(RUNS_KEY) || []; }
+  function getCachedStreams(id) { return lsGet(STREAM_PREFIX + id); }
+  function getCachedEfforts(id) { return lsGet(EFFORT_PREFIX + id) || []; }
   function clearCache() {
-    const keysToRemove = [];
+    const keys = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && (k.startsWith('strava_runs') || k.startsWith('strava_stream') ||
-               k.startsWith('strava_efforts') || k === LAST_FETCH_KEY)) {
-        keysToRemove.push(k);
-      }
+      if (k && (k.startsWith('strava_runs') || k.startsWith('strava_stream') || k.startsWith('strava_effort') || k === LAST_FETCH_KEY)) keys.push(k);
     }
-    keysToRemove.forEach(k => localStorage.removeItem(k));
+    keys.forEach(k => localStorage.removeItem(k));
   }
 
-  return {
-    fetchAllActivities,
-    fetchStreams,
-    fetchStreamsForActivities,
-    fetchBestEfforts,
-    fetchAllBestEffortsBackground,
-    getCachedRuns,
-    getCachedStreams,
-    getCachedEfforts,
-    clearCache
-  };
+  return { fetchAllActivities, fetchStreams, fetchStreamsForActivities, fetchBestEfforts, fetchAllBestEffortsBackground, getCachedRuns, getCachedStreams, getCachedEfforts, clearCache };
 })();
