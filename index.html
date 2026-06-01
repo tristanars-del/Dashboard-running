@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Running Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- SETUP MODAL -->
+  <div id="setup-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-logo">⚡</div>
+      <h2>Configurer Strava</h2>
+      <p>Saisissez vos identifiants Strava API pour commencer. Ces données sont stockées uniquement dans votre navigateur.</p>
+      <div class="form-group">
+        <label>Client ID</label>
+        <input type="text" id="setup-client-id" placeholder="12345" autocomplete="off" />
+      </div>
+      <div class="form-group">
+        <label>Client Secret</label>
+        <input type="password" id="setup-client-secret" placeholder="abc123..." autocomplete="off" />
+      </div>
+      <p class="modal-hint">
+        Créez votre app sur <a href="https://www.strava.com/settings/api" target="_blank">strava.com/settings/api</a>.<br/>
+        Redirect URI : <code id="redirect-uri-display"></code>
+      </p>
+      <button class="btn-primary" id="setup-save-btn">Connecter Strava →</button>
+    </div>
+  </div>
+
+  <!-- LOADING SCREEN -->
+  <div id="loading-screen" class="hidden">
+    <div class="loading-content">
+      <div class="loading-icon">🏃</div>
+      <div class="loading-bar-wrap"><div class="loading-bar" id="loading-bar"></div></div>
+      <div class="loading-text" id="loading-text">Connexion à Strava…</div>
+    </div>
+  </div>
+
+  <!-- DRAWER OVERLAY -->
+  <div id="drawer-overlay" class="hidden"></div>
+
+  <!-- SIDE DRAWER -->
+  <nav id="drawer" class="drawer hidden">
+    <div class="drawer-header">
+      <span class="drawer-logo">⚡ Running</span>
+      <button id="drawer-close" aria-label="Fermer">✕</button>
+    </div>
+    <ul class="drawer-nav">
+      <li><a href="#" data-page="home" class="nav-item active"><span class="nav-icon">🏠</span>Accueil</a></li>
+      <li><a href="#" data-page="analysis" class="nav-item"><span class="nav-icon">📊</span>Analyse</a></li>
+      <li><a href="#" data-page="performance" class="nav-item"><span class="nav-icon">🎯</span>Performance</a></li>
+      <li><a href="#" data-page="records" class="nav-item"><span class="nav-icon">🏆</span>Records</a></li>
+      <li><a href="#" data-page="sessions" class="nav-item"><span class="nav-icon">📋</span>Séances</a></li>
+      <li><a href="#" data-page="methods" class="nav-item"><span class="nav-icon">📚</span>Méthodes</a></li>
+    </ul>
+    <div class="drawer-footer">
+      <button id="refresh-btn" class="btn-outline">🔄 Actualiser</button>
+      <button id="logout-btn" class="btn-ghost">Déconnexion</button>
+    </div>
+  </nav>
+
+  <!-- TOP BAR -->
+  <header id="topbar">
+    <button id="hamburger" aria-label="Menu">☰</button>
+    <span id="page-title">Accueil</span>
+    <div id="topbar-right">
+      <span id="athlete-name"></span>
+    </div>
+  </header>
+
+  <!-- MAIN CONTENT -->
+  <main id="main-content">
+
+    <!-- ======= HOME PAGE ======= -->
+    <section id="page-home" class="page active">
+      <div id="alert-banner" class="alert-banner hidden"></div>
+      <div class="stats-row">
+        <div class="stat-card" id="card-tsb">
+          <div class="stat-label">Forme du jour <button class="tip-btn" data-tip="tsb">?</button></div>
+          <div class="stat-value" id="home-tsb">—</div>
+          <div class="stat-sub" id="home-tsb-label">TSB</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">VO2max <button class="tip-btn" data-tip="vo2max">?</button></div>
+          <div class="stat-value accent" id="home-vo2max">—</div>
+          <div class="stat-sub">ml/kg/min</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Volume semaine</div>
+          <div class="stat-value turquoise" id="home-weekly-vol">—</div>
+          <div class="stat-sub">km cette semaine</div>
+        </div>
+      </div>
+
+      <div class="section-title">Cette semaine
+        <span id="home-week-range" class="section-sub"></span>
+      </div>
+      <div id="home-week-sessions"></div>
+
+      <div class="section-title">Dernière séance</div>
+      <div id="home-last-session"></div>
+
+      <div class="section-title">VO2max — 8 semaines <button class="tip-btn" data-tip="vo2max">?</button></div>
+      <div class="chart-wrap"><canvas id="chart-vo2max-home"></canvas></div>
+    </section>
+
+    <!-- ======= ANALYSIS PAGE ======= -->
+    <section id="page-analysis" class="page hidden">
+      <div class="filter-bar">
+        <span class="filter-label">Période :</span>
+        <div class="filter-pills" id="analysis-period-filter">
+          <button class="pill" data-val="4w">4 sem.</button>
+          <button class="pill active" data-val="8w">8 sem.</button>
+          <button class="pill" data-val="12w">12 sem.</button>
+          <button class="pill" data-val="6m">6 mois</button>
+          <button class="pill" data-val="1y">1 an</button>
+          <button class="pill" data-val="all">Tout</button>
+        </div>
+      </div>
+
+      <div class="metrics-grid" id="analysis-metrics"></div>
+
+      <div class="section-title">Volume hebdomadaire par type</div>
+      <div class="chart-wrap"><canvas id="chart-volume-weekly"></canvas></div>
+
+      <div class="section-title">Temps par zone FC</div>
+      <div class="chart-wrap"><canvas id="chart-hr-zones-time"></canvas></div>
+
+      <div class="charts-row">
+        <div>
+          <div class="section-title">Types de séances</div>
+          <div class="chart-wrap chart-pie"><canvas id="chart-type-pie"></canvas></div>
+        </div>
+        <div>
+          <div class="section-title">Zones FC</div>
+          <div class="chart-wrap chart-pie"><canvas id="chart-hr-pie"></canvas></div>
+        </div>
+      </div>
+
+      <div class="section-title">ATL / CTL / TSB <button class="tip-btn" data-tip="atl">?</button></div>
+      <div class="chart-wrap"><canvas id="chart-atl-ctl"></canvas></div>
+
+      <div class="section-title">Évolution VO2max</div>
+      <div class="chart-wrap"><canvas id="chart-vo2max-analysis"></canvas></div>
+
+      <div class="section-title">
+        Chrono estimé —
+        <select id="analysis-race-select" class="inline-select">
+          <option value="5k">5 km</option>
+          <option value="10k">10 km</option>
+          <option value="half">Semi</option>
+          <option value="marathon">Marathon</option>
+        </select>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-race-time"></canvas></div>
+    </section>
+
+    <!-- ======= PERFORMANCE PAGE ======= -->
+    <section id="page-performance" class="page hidden">
+      <div class="metrics-grid" id="perf-metrics"></div>
+
+      <div class="section-title">Zones FC <button class="tip-btn" data-tip="zones">?</button></div>
+      <div id="hr-zones-display"></div>
+
+      <div class="section-title">Estimations VDOT <button class="tip-btn" data-tip="vdot">?</button></div>
+      <div id="vdot-estimates"></div>
+
+      <div class="section-title">Allures d'entraînement recommandées</div>
+      <div id="training-paces"></div>
+
+      <div class="section-title">Allure EF dans le temps</div>
+      <div class="chart-wrap"><canvas id="chart-ef-pace"></canvas></div>
+
+      <div class="section-title">Allure vs FC (scatter)</div>
+      <div class="chart-wrap"><canvas id="chart-pace-hr-scatter"></canvas></div>
+    </section>
+
+    <!-- ======= RECORDS PAGE ======= -->
+    <section id="page-records" class="page hidden">
+      <div class="filter-bar">
+        <span class="filter-label">Période :</span>
+        <div class="filter-pills" id="records-period-filter">
+          <button class="pill active" data-val="all">Depuis toujours</button>
+          <button class="pill" data-val="1m">1 mois</button>
+          <button class="pill" data-val="3m">3 mois</button>
+          <button class="pill" data-val="6m">6 mois</button>
+          <button class="pill" data-val="1y">1 an</button>
+        </div>
+      </div>
+
+      <div class="section-title">Records par distance</div>
+      <div id="pr-list"></div>
+
+      <div class="section-title">
+        Progression —
+        <select id="pr-distance-select" class="inline-select">
+          <option value="5000">5 km</option>
+          <option value="10000">10 km</option>
+          <option value="21097">Semi</option>
+          <option value="42195">Marathon</option>
+        </select>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-pr-progression"></canvas></div>
+
+      <div class="section-title">Records de performance</div>
+      <div id="perf-records"></div>
+
+      <div class="section-title">Records de volume</div>
+      <div id="vol-records"></div>
+    </section>
+
+    <!-- ======= SESSIONS PAGE ======= -->
+    <section id="page-sessions" class="page hidden">
+      <div id="session-list-view">
+        <div class="filter-bar sessions-filters">
+          <input type="search" id="session-search" placeholder="Rechercher…" class="search-input" />
+          <select id="session-type-filter" class="inline-select">
+            <option value="">Tous types</option>
+          </select>
+          <select id="session-period-filter" class="inline-select">
+            <option value="">Toutes périodes</option>
+            <option value="7d">7 jours</option>
+            <option value="30d">30 jours</option>
+            <option value="90d">90 jours</option>
+            <option value="1y">1 an</option>
+          </select>
+          <select id="session-sort" class="inline-select">
+            <option value="date-desc">Plus récent</option>
+            <option value="date-asc">Plus ancien</option>
+            <option value="dist-desc">Distance ↓</option>
+            <option value="tss-desc">TSS ↓</option>
+          </select>
+        </div>
+        <div id="sessions-container"></div>
+        <div id="sessions-pagination" class="pagination"></div>
+      </div>
+
+      <div id="session-detail-view" class="hidden">
+        <button id="back-to-sessions" class="btn-back">← Retour</button>
+        <div id="session-detail-content"></div>
+      </div>
+    </section>
+
+    <!-- ======= METHODS PAGE ======= -->
+    <section id="page-methods" class="page hidden">
+      <div class="methods-content" id="methods-content"></div>
+    </section>
+
+  </main>
+
+  <!-- TIP MODAL -->
+  <div id="tip-modal" class="tip-modal hidden">
+    <div class="tip-modal-box">
+      <button id="tip-modal-close">✕</button>
+      <h3 id="tip-modal-title"></h3>
+      <div id="tip-modal-body"></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="js/utils.js"></script>
+  <script src="js/tips.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/strava.js"></script>
+  <script src="js/classify.js"></script>
+  <script src="js/metrics.js"></script>
+  <script src="js/weather.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/records.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
