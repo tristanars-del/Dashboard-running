@@ -183,7 +183,7 @@ const Classify = (() => {
   }
 
   // Get taper sessions (light sessions in 10 days before a competition)
-  function markTaperSessions(activities, classifications) {
+  function markTaperSessions(activities, classifications, fcmax) {
     // Find competition dates
     const raceDates = activities
       .filter(a => classifications[a.id] === 'race')
